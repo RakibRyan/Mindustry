@@ -40,9 +40,11 @@ public class Accelerator extends Block{
     /** Override for planets that this block can launch to. If null, the planet's launch candidates are used. */
     public @Nullable Seq<Planet> launchCandidates;
 
-    //TODO: launching needs audio!
-
-    public Music launchMusic = Musics.coreLaunch;
+    public Sound lightningSound = new RandomSound(Sounds.acceleratorLightning1, Sounds.acceleratorLightning2, Sounds.shootArc);
+    public float lightningSoundVolume = 0.85f;
+    public Sound chargeSound = Sounds.acceleratorCharge;
+    public Sound launchSound = Sounds.acceleratorLaunch;
+    public Sound constructSound = Sounds.acceleratorConstruct;
     public float launchDuration = 120f;
     public float chargeDuration = 220f;
     public float buildDuration = 120f;
@@ -111,6 +113,7 @@ public class Accelerator extends Block{
         public float progress;
         public float time, launchHeat;
         public boolean launching;
+        public float launchTime;
 
         protected float cloudSeed;
 
@@ -139,6 +142,10 @@ public class Accelerator extends Block{
             return progress;
         }
 
+        public boolean isCoreBuilt(){
+            return progress >= 1f;
+        }
+
         @Override
         public void draw(){
             super.draw();
@@ -156,7 +163,18 @@ public class Accelerator extends Block{
             {
                 if(launching){
                     Draw.reset();
+
+                    Draw.blend(Blending.additive);
+                    Fill.light(x, y, 15, launchBlock.size * tilesize * 1f, Tmp.c2.set(Pal.accent).a(launchTime / chargeDuration), Tmp.c1.set(Pal.accent).a(0f));
+                    Draw.blend();
+
                     Draw.rect(launchBlock.fullIcon, x, y);
+
+                    Draw.z(Layer.bullet);
+                    Draw.mixcol(Pal.accent, Mathf.clamp(launchTime / chargeDuration));
+                    Draw.color(1f, 1f, 1f, Interp.pow2In.apply(Mathf.clamp(launchTime / chargeDuration * 0.7f)));
+                    Draw.rect(launchBlock.fullIcon, x, y);
+                    Draw.reset();
                 }else{
                     Drawf.shadow(x, y, launchBlock.size * tilesize * 2f, progress);
                     Draw.draw(Layer.blockBuilding, () -> {
@@ -174,7 +192,6 @@ public class Accelerator extends Block{
                         Draw.color();
                     });
                 }
-
 
                 Draw.reset();
             }
@@ -212,7 +229,7 @@ public class Accelerator extends Block{
         }
 
         public boolean canLaunch(){
-            return isValid() && state.isCampaign() && efficiency > 0f && power.graph.getBatteryStored() >= powerBufferRequirement-0.00001f && progress >= 1f && !launching;
+            return isValid() && !net.client() && state.isCampaign() && efficiency > 0f && power.graph.getBatteryStored() >= powerBufferRequirement-0.00001f && progress >= 1f && !launching;
         }
 
         @Override
@@ -238,6 +255,10 @@ public class Accelerator extends Block{
             ui.planet.showPlanetLaunch(state.rules.sector, launchCandidates == null ? state.rules.sector.planet.launchCandidates : launchCandidates, sector -> {
                 if(canLaunch()){
                     consume();
+                    ItemSeq resources = new ItemSeq();
+                    resources.add(items);
+                    items.clear();
+
                     power.graph.useBatteries(powerBufferRequirement);
                     progress = 0f;
 
@@ -249,6 +270,7 @@ public class Accelerator extends Block{
                         sector.planet.unlockedOnLand.each(UnlockableContent::unlock);
 
                         universe.clearLoadoutInfo();
+                        universe.updateLaunchResources(resources);
                         universe.updateLoadout((CoreBlock)launchBlock);
 
                         control.playSector(sector);
@@ -261,7 +283,7 @@ public class Accelerator extends Block{
 
         @Override
         public int getMaximumAccepted(Item item){
-            return capacities[item.id];
+            return capacities[item.id] + (isCoreBuilt() ? launchBlock.itemCapacity : 0);
         }
 
         @Override
@@ -297,13 +319,7 @@ public class Accelerator extends Block{
 
         @Override
         public Music landMusic(){
-            //unused
-            return launchMusic;
-        }
-
-        @Override
-        public Music launchMusic(){
-            return launchMusic;
+            return null;
         }
 
         @Override
@@ -329,11 +345,14 @@ public class Accelerator extends Block{
                 }
             });
             Core.scene.add(image);
+            chargeSound.at(this);
+            constructSound.at(this);
 
             Time.run(chargeDuration, () -> {
                 Fx.coreLaunchConstruct.at(x, y, launchBlock.size);
                 Fx.launchAccelerator.at(x, y);
                 Effect.shake(10f, 14f, this);
+                launchSound.at(this);
 
                 for(int i = 0; i < launchLightning; i++){
                     float a = Mathf.random(360f);
@@ -343,7 +362,7 @@ public class Accelerator extends Block{
                 float spacing = 12f;
                 for(int i = 0; i < 13; i++){
                     int fi = i;
-                    Time.run(i * 1.1f, () -> {
+                    Time.run(i * 2f, () -> {
                         float radius = block.size/2f + 1 + spacing * fi;
                         int rays = Mathf.ceil(radius * Mathf.PI * 2f / 6f);
                         for(int r = 0; r < rays; r++){
@@ -358,21 +377,21 @@ public class Accelerator extends Block{
                         }
                     });
                 }
-
-
             });
         }
 
         @Override
         public void endLaunch(){
             launching = false;
+            launchTime = 0f;
         }
 
         @Override
         public float zoomLaunch(){
             float rawTime = launchDuration() - renderer.getLandTime();
+            float shake = rawTime < chargeDuration ? Interp.pow10In.apply(Mathf.clamp(rawTime/chargeDuration)) : 0f;
 
-            Core.camera.position.set(this);
+            Core.camera.position.set(x, y).add(Tmp.v1.setToRandomDirection().scl(shake * 2f));
 
             if(rawTime < chargeDuration){
                 float fin = rawTime / chargeDuration;
@@ -389,6 +408,7 @@ public class Accelerator extends Block{
         @Override
         public void updateLaunch(){
             float in = renderer.getLandTimeIn() * launchDuration();
+            launchTime = launchDuration() - in;
             float tsize = Mathf.sample(CoreBlock.thrusterSizes, (in + 35f) / launchDuration());
 
             float rawFin = renderer.getLandTimeIn();
@@ -398,6 +418,7 @@ public class Accelerator extends Block{
             if(in > launchDuration){
                 if(Mathf.chanceDelta(lightningLaunchChance * Interp.pow3In.apply(chargeFout))){
                     float a = Mathf.random(360f);
+                    lightningSound.at(this, 1f + Mathf.range(0.1f), lightningSoundVolume);
                     Lightning.create(team, lightningColor, lightningDamage, x + Angles.trnsx(a, lightningOffset), y + Angles.trnsy(a, lightningOffset), a, Mathf.random(lightningLengthMin, lightningLengthMax));
                 }
             }

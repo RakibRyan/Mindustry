@@ -43,6 +43,11 @@ public class UnitPayload implements Payload{
     }
 
     @Override
+    public boolean contentEquals(Payload other){
+        return other instanceof UnitPayload up && up.unit.type == unit.type;
+    }
+
+    @Override
     public void update(@Nullable Unit unitHolder, @Nullable Building buildingHolder){
         unit.type.updatePayload(unit, unitHolder, buildingHolder);
     }
@@ -118,7 +123,7 @@ public class UnitPayload implements Payload{
         }
 
         //cannot dump when there's a lot of overlap going on
-        if(!unit.type.flying && Units.count(unit.x, unit.y, unit.physicSize(), o -> o.isGrounded() && (o.type.allowLegStep == unit.type.allowLegStep)) > 0){
+        if(!unit.type.flying && Units.count(unit.x, unit.y, unit.physicSize() * 1.05f, o -> o.isGrounded() && (o.type.allowLegStep == unit.type.allowLegStep)) > 0){
             return false;
         }
 
@@ -130,6 +135,7 @@ public class UnitPayload implements Payload{
         unit.add();
         unit.unloaded();
         Events.fire(new UnitUnloadEvent(unit));
+        Units.notifyUnitSpawn(unit);
 
         return true;
     }
@@ -149,6 +155,7 @@ public class UnitPayload implements Payload{
 
         float e = unit.elevation;
         unit.elevation = 0f;
+        Draw.scl(1f, 1f);
         unit.type.draw(unit);
         unit.elevation = e;
 

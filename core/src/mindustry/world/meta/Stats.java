@@ -1,11 +1,19 @@
 package mindustry.world.meta;
 
+import arc.*;
+import arc.scene.ui.layout.*;
 import arc.struct.ObjectMap.*;
 import arc.struct.*;
 import arc.util.*;
+import mindustry.*;
+import mindustry.gen.*;
+import mindustry.mod.*;
 import mindustry.type.*;
 
+import java.util.*;
+
 /** Hold and organizes a list of block stats. */
+@NoPatch
 public class Stats{
     /** Whether to display stats with categories. If false, categories are completely ignored during display. */
     public boolean useCategories = false;
@@ -30,6 +38,16 @@ public class Stats{
     /** Adds an integer percent stat value. Value is assumed to be in the 0-1 range. */
     public void addPercent(Stat stat, float value){
         add(stat, StatValues.number((int)(value * 100), StatUnit.percent));
+    }
+
+    /** Adds a multiplicative modifier stat value. Value is assumed to be in the 0-1 range. */
+    public void addMultModifier(Stat stat, float value){
+        add(stat, StatValues.multiplierModifier(value));
+    }
+
+    /** Adds an percent modifier stat value. Value is assumed to be in the 0-1 range. */
+    public void addPercentModifier(Stat stat, float value){
+        add(stat, StatValues.percentModifier(value));
     }
 
     /** Adds a single y/n boolean value. */
@@ -118,5 +136,22 @@ public class Stats{
             dirty = false;
         }
         return map;
+    }
+
+    public void statInfo(Cell<?> cell, Stat stat){
+        if(cell == null || stat == null) return;
+
+        String key = "stat." + stat.name.toLowerCase(Locale.ROOT);
+        if(Core.bundle.has(key + ".info")){
+            if(Vars.mobile && !Core.graphics.isPortrait()){ //disabled in portrait - broken and goes offscreen
+                Table table = new Table();
+                table.add(cell.get()).left().expandX().fillX();
+                cell.clearElement();
+                table.button(Icon.infoSmall, () -> Vars.ui.showInfo("@" + key + ".info")).size(32f).right();
+                cell.setElement(table).left().expandX().fillX();
+            }else{
+                cell.tooltip("@" + key + ".info");
+            }
+        }
     }
 }

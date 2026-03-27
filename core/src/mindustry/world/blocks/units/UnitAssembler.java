@@ -1,6 +1,7 @@
 package mindustry.world.blocks.units;
 
 import arc.*;
+import arc.audio.*;
 import arc.graphics.*;
 import arc.graphics.g2d.*;
 import arc.math.*;
@@ -9,6 +10,7 @@ import arc.scene.ui.layout.*;
 import arc.struct.*;
 import arc.util.*;
 import arc.util.io.*;
+import mindustry.*;
 import mindustry.ai.types.*;
 import mindustry.annotations.Annotations.*;
 import mindustry.content.*;
@@ -16,6 +18,7 @@ import mindustry.ctype.*;
 import mindustry.entities.*;
 import mindustry.entities.units.*;
 import mindustry.game.*;
+import mindustry.game.EventType.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
 import mindustry.io.*;
@@ -40,23 +43,30 @@ public class UnitAssembler extends PayloadBlock{
     public UnitType droneType = UnitTypes.assemblyDrone;
     public int dronesCreated = 4;
     public float droneConstructTime = 60f * 4f;
+    public int[] capacities = {};
 
     public Seq<AssemblerUnitPlan> plans = new Seq<>(4);
 
+    public Sound createSound = Sounds.unitCreateBig;
+    public float createSoundVolume = 1f;
+
     protected @Nullable ConsumePayloadDynamic consPayload;
+    protected @Nullable ConsumeItemDynamic consItem;
 
     public UnitAssembler(String name){
         super(name);
         update = solid = true;
         rotate = true;
         rotateDraw = false;
-        acceptsPayload = true;
+        acceptsPayload = hasItems = true;
         flags = EnumSet.of(BlockFlag.unitAssembler);
         regionRotated1 = 1;
         sync = true;
         group = BlockGroup.units;
         commandable = true;
         quickRotate = false;
+        ambientSound = Sounds.loopUnitBuilding;
+        ambientSoundVolume = 0.13f;
     }
 
     public Rect getRect(Rect rect, float x, float y, int rotation){
@@ -88,13 +98,28 @@ public class UnitAssembler extends PayloadBlock{
         //overlapping construction areas not allowed; grow by a tiny amount so edges can't overlap either.
         Rect rect = getRect(Tmp.r1, tile.worldx() + offset, tile.worldy() + offset, rotation).grow(0.1f);
         return
-            !indexer.getFlagged(team, BlockFlag.unitAssembler).contains(b -> getRect(Tmp.r2, b.x, b.y, b.rotation).overlaps(rect)) &&
-            !team.data().getBuildings(ConstructBlock.get(size)).contains(b -> ((ConstructBuild)b).current instanceof UnitAssembler && getRect(Tmp.r2, b.x, b.y, b.rotation).overlaps(rect));
+            !indexer.getFlagged(team, BlockFlag.unitAssembler).contains(b -> b.block instanceof UnitAssembler assembler && assembler.getRect(Tmp.r2, b.x, b.y, b.rotation).overlaps(rect)) &&
+            !team.data().getBuildings(ConstructBlock.get(size)).contains(b -> ((ConstructBuild)b).current instanceof UnitAssembler assembler && assembler.getRect(Tmp.r2, b.x, b.y, b.rotation).overlaps(rect));
     }
 
     @Override
     public void setBars(){
         super.setBars();
+
+        boolean planLiquids = false;
+        for(int i = 0; i < plans.size; i++){
+            var req = plans.get(i).liquidReq;
+            if(req != null && req.length > 0){
+                for(var stack : req){
+                    addLiquidBar(stack.liquid);
+                }
+                planLiquids = true;
+            }
+        }
+
+        if(planLiquids){
+            removeBar("liquid");
+        }
 
         addBar("progress", (UnitAssemblerBuild e) -> new Bar("bar.progress", Pal.ammo, () -> e.progress));
 
@@ -124,12 +149,42 @@ public class UnitAssembler extends PayloadBlock{
 
     @Override
     public void init(){
-        updateClipRadius(areaSize * tilesize);
-        consume(consPayload = new ConsumePayloadDynamic((UnitAssemblerBuild build) -> build.plan().requirements));
+        updateClipRadius((areaSize + 1) * tilesize);
 
-        consumeBuilder.each(c -> c.multiplier = b -> state.rules.unitCost(b.team));
+        consume(consPayload = new ConsumePayloadDynamic((UnitAssemblerBuild build) -> build.plan().requirements));
+        consume(consItem = new ConsumeItemDynamic((UnitAssemblerBuild build) -> build.plan().itemReq != null ? build.plan().itemReq : ItemStack.empty));
+        consume(new ConsumeLiquidsDynamic((UnitAssemblerBuild build) -> build.plan().liquidReq != null ? build.plan().liquidReq : LiquidStack.empty));
 
         super.init();
+
+        initCapacities();
+    }
+
+    @Override
+    public void afterPatch(){
+        initCapacities();
+        super.afterPatch();
+    }
+
+    public void initCapacities(){
+        consumeBuilder.each(c -> c.multiplier = b -> state.rules.unitCost(b.team));
+
+        itemCapacity = 10;
+        capacities = new int[Vars.content.items().size];
+        for(AssemblerUnitPlan plan : plans){
+            if(plan.itemReq != null){
+                for(ItemStack stack : plan.itemReq){
+                    capacities[stack.item.id] = Math.max(capacities[stack.item.id], stack.amount * 2);
+                    itemCapacity = Math.max(itemCapacity, stack.amount * 2);
+                }
+            }
+
+            if(plan.liquidReq != null){
+                for(LiquidStack stack : plan.liquidReq){
+                    liquidFilter[stack.liquid.id] = true;
+                }
+            }
+        }
     }
 
     @Override
@@ -163,16 +218,40 @@ public class UnitAssembler extends PayloadBlock{
                         }).left();
 
                         t.table(req -> {
-                            req.right();
-                            for(int i = 0; i < plan.requirements.size; i++){
-                                if(i % 6 == 0){
-                                    req.row();
+                            req.add().grow(); //it refuses to go to the right unless I do this. please help.
+
+                            req.table(solid -> {
+                                int length = 0;
+                                if(plan.itemReq != null){
+                                    for(int i = 0; i < plan.itemReq.length; i++){
+                                        if(length % 6 == 0){
+                                            solid.row();
+                                        }
+                                        solid.add(StatValues.stack(plan.itemReq[i])).pad(5);
+                                        length++;
+                                    }
                                 }
 
-                                PayloadStack stack = plan.requirements.get(i);
-                                req.add(StatValues.stack(stack)).pad(5);
+                                for(int i = 0; i < plan.requirements.size; i++){
+                                    if(length % 6 == 0){
+                                        solid.row();
+                                    }
+                                    solid.add(StatValues.stack(plan.requirements.get(i))).pad(5);
+                                    length++;
+                                }
+                            }).right();
+
+                            LiquidStack[] stacks = plan.liquidReq;
+                            if(stacks != null){
+                                for(int i = 0; i < plan.liquidReq.length; i++){
+                                    req.row();
+
+                                    req.add().grow(); //another one.
+
+                                    req.add(StatValues.displayLiquid(stacks[i].liquid, stacks[i].amount * 60f, true)).right();
+                                }
                             }
-                        }).right().grow().pad(10f);
+                        }).grow().pad(10f);
                     }else{
                         t.image(Icon.lock).color(Pal.darkerGray).size(40).pad(10);
                     }
@@ -185,7 +264,9 @@ public class UnitAssembler extends PayloadBlock{
 
     public static class AssemblerUnitPlan{
         public UnitType unit;
-        public Seq<PayloadStack> requirements;
+        @Nullable public Seq<PayloadStack> requirements;
+        @Nullable public ItemStack[] itemReq;
+        @Nullable public LiquidStack[] liquidReq;
         public float time;
 
         public AssemblerUnitPlan(UnitType unit, float time, Seq<PayloadStack> requirements){
@@ -296,7 +377,7 @@ public class UnitAssembler extends PayloadBlock{
         @Override
         public boolean shouldConsume(){
             //liquid is only consumed when building is being done
-            return enabled && !wasOccupied && Units.canCreate(team, plan().unit) && consPayload.efficiency(this) > 0;
+            return enabled && !wasOccupied && Units.canCreate(team, plan().unit) && consPayload.efficiency(this) > 0 && consItem.efficiency(this) > 0 && team.activateUnitFactories();
         }
 
         @Override
@@ -446,19 +527,29 @@ public class UnitAssembler extends PayloadBlock{
             Vec2 spawn = getUnitSpawn();
             consume();
 
-            if(!net.client()){
-                var unit = plan.unit.create(team);
-                if(unit != null && unit.isCommandable() && commandPos != null){
-                    unit.command().commandPosition(commandPos);
-                }
-                unit.set(spawn.x + Mathf.range(0.001f), spawn.y + Mathf.range(0.001f));
-                unit.rotation = rotdeg();
+            var unit = plan.unit.create(team);
+            if(unit.isCommandable() && commandPos != null){
+                unit.command().commandPosition(commandPos);
+            }
+            unit.set(spawn.x + Mathf.range(0.001f), spawn.y + Mathf.range(0.001f));
+            unit.rotation = rotdeg();
+            var targetBuild = unit.buildOn();
+            //'source' is the target build instead of this building; this is because some blocks only accept things from certain angles, and this is a non-standard payload
+            var payload = new UnitPayload(unit);
+            if(targetBuild != null && targetBuild.team == team && targetBuild.acceptPayload(targetBuild, payload)){
+                targetBuild.handlePayload(targetBuild, payload);
+            }else if(!net.client()){
                 unit.add();
+                Units.notifyUnitSpawn(unit);
             }
 
+            createSound.at(spawn.x, spawn.y, 1f + Mathf.range(0.06f), createSoundVolume);
+
             progress = 0f;
-            Fx.unitAssemble.at(spawn.x, spawn.y, 0f, plan.unit);
+            Fx.unitAssemble.at(spawn.x, spawn.y, rotdeg() - 90f, plan.unit);
             blocks.clear();
+
+            Events.fire(new UnitCreateEvent(unit, this));
         }
 
         @Override
@@ -498,18 +589,19 @@ public class UnitAssembler extends PayloadBlock{
             var plan = plan();
 
             //draw the unit construction as outline
-            //TODO flashes when no gallium
             Draw.draw(Layer.blockBuilding, () -> {
                 Draw.color(Pal.accent, warmup);
 
                 Shaders.blockbuild.region = plan.unit.fullIcon;
                 Shaders.blockbuild.time = Time.time;
+                Shaders.blockbuild.alpha = warmup;
                 //margin due to units not taking up whole region
                 Shaders.blockbuild.progress = Mathf.clamp(progress + 0.05f);
 
                 Draw.rect(plan.unit.fullIcon, sx, sy, rotdeg() - 90f);
                 Draw.flush();
                 Draw.color();
+                Shaders.blockbuild.alpha = 1f;
             });
 
             Draw.reset();
@@ -581,6 +673,13 @@ public class UnitAssembler extends PayloadBlock{
             float rot = payload.angleTo(spawn);
             Fx.shootPayloadDriver.at(payload.x(), payload.y(), rot);
             Fx.payloadDeposit.at(payload.x(), payload.y(), rot, new YeetData(spawn.cpy(), payload.content()));
+            Sounds.shootPayload.at(x, y, 1f + Mathf.range(0.1f), 1f);
+        }
+
+        @Override
+        public BlockStatus status(){
+            if(!team.activateUnitFactories()) return BlockStatus.inactive;
+            return super.status();
         }
 
         @Override
@@ -597,8 +696,21 @@ public class UnitAssembler extends PayloadBlock{
         @Override
         public boolean acceptPayload(Building source, Payload payload){
             var plan = plan();
-            return (this.payload == null || source instanceof UnitAssemblerModuleBuild) &&
-                    plan.requirements.contains(b -> b.item == payload.content() && blocks.get(payload.content()) < Mathf.round(b.amount * state.rules.unitCost(team)));
+            return (this.payload == null || (source instanceof UnitAssemblerModuleBuild)) &&
+                    plan.requirements.contains(b -> b.item == payload.content() &&
+                    blocks.get(payload.content()) < Mathf.round(b.amount * state.rules.unitCost(team)) -
+                    (source instanceof UnitAssemblerModuleBuild && (this.payload != null && this.payload.contentEquals(payload)) ? 1 : 0));
+        }
+
+        @Override
+        public int getMaximumAccepted(Item item){
+            return Mathf.round(capacities[item.id] * state.rules.unitCost(team));
+        }
+
+        @Override
+        public boolean acceptItem(Building source, Item item){
+            return plan().itemReq != null && items.get(item) < getMaximumAccepted(item) &&
+                    Structs.contains(plan().itemReq, stack -> stack.item == item);
         }
 
         @Override

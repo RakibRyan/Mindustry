@@ -66,11 +66,7 @@ public class Planets{
             defaultCore = Blocks.coreBastion;
             iconColor = Color.valueOf("ff9266");
             enemyBuildSpeedMultiplier = 0.4f;
-
-            //TODO disallowed for now
             allowLaunchToNumbered = false;
-
-            //TODO SHOULD there be lighting?
             updateLighting = false;
 
             defaultAttributes.set(Attribute.heat, 0.8f);
@@ -87,12 +83,13 @@ public class Planets{
             };
             campaignRuleDefaults.fog = true;
             campaignRuleDefaults.showSpawns = true;
+            campaignRuleDefaults.rtsAI = true;
 
             unlockedOnLand.add(Blocks.coreBastion);
         }};
 
         //TODO names
-        gier = makeAsteroid("gier", erekir, Blocks.ferricStoneWall, Blocks.carbonWall, 0.4f, 7, 1f, gen -> {
+        gier = makeAsteroid("gier", erekir, Blocks.ferricStoneWall, Blocks.carbonWall, -5, 0.4f, 7, 1f, gen -> {
             gen.min = 25;
             gen.max = 35;
             gen.carbonChance = 0.6f;
@@ -100,7 +97,7 @@ public class Planets{
             gen.berylChance = 0.1f;
         });
 
-        notva = makeAsteroid("notva", sun, Blocks.ferricStoneWall, Blocks.beryllicStoneWall, 0.55f, 9, 1.3f, gen -> {
+        notva = makeAsteroid("notva", sun, Blocks.ferricStoneWall, Blocks.beryllicStoneWall, -4, 0.55f, 9, 1.3f, gen -> {
             gen.berylChance = 0.8f;
             gen.iceChance = 0f;
             gen.carbonChance = 0.01f;
@@ -124,6 +121,7 @@ public class Planets{
         }};
 
         serpulo = new Planet("serpulo", sun, 1f, 3){{
+            loadPlanetData = true;
             generator = new SerpuloPlanetGenerator();
             meshLoader = () -> new HexMesh(this, 6);
             cloudMeshLoader = () -> new MultiMesh(
@@ -131,33 +129,33 @@ public class Planets{
                 new HexSkyMesh(this, 1, 0.6f, 0.16f, 5, Color.white.cpy().lerp(Pal.spore, 0.55f).a(0.75f), 2, 0.45f, 1f, 0.41f)
             );
 
+            enemyFactoryActivationDelay = 60f * 60f * 2f;
             launchCapacityMultiplier = 0.5f;
             sectorSeed = 2;
             allowWaves = true;
-            allowWaveSimulation = true;
+            allowLegacyLaunchPads = true;
             allowSectorInvasion = true;
             allowLaunchSchematics = true;
             enemyCoreSpawnReplace = true;
             allowLaunchLoadout = true;
-            //doesn't play well with configs
-            prebuildBase = false;
             ruleSetter = r -> {
                 r.waveTeam = Team.crux;
                 r.placeRangeCheck = false;
                 r.showSpawns = false;
                 r.coreDestroyClear = true;
             };
+            showRtsAIRule = true;
             iconColor = Color.valueOf("7d4dff");
             atmosphereColor = Color.valueOf("3c1b8f");
             atmosphereRadIn = 0.02f;
             atmosphereRadOut = 0.3f;
-            startSector = 15;
+            startSector = 170;
             alwaysUnlocked = true;
             allowSelfSectorLaunch = true;
             landCloudColor = Pal.spore.cpy().a(0.5f);
         }};
 
-        verilus = makeAsteroid("verlius", sun, Blocks.stoneWall, Blocks.iceWall, 0.5f, 12, 2f, gen -> {
+        verilus = makeAsteroid("verilus", sun, Blocks.stoneWall, Blocks.iceWall, -1, 0.5f, 12, 2f, gen -> {
             gen.berylChance = 0f;
             gen.iceChance = 0.6f;
             gen.carbonChance = 0.1f;
@@ -165,7 +163,7 @@ public class Planets{
         });
     }
 
-    private static Planet makeAsteroid(String name, Planet parent, Block base, Block tint, float tintThresh, int pieces, float scale, Cons<AsteroidGenerator> cgen){
+    private static Planet makeAsteroid(String name, Planet parent, Block base, Block tint, int seed, float tintThresh, int pieces, float scale, Cons<AsteroidGenerator> cgen){
         return new Planet(name, parent, 0.12f){{
             hasAtmosphere = false;
             updateLighting = false;
@@ -188,13 +186,13 @@ public class Planets{
                 Rand rand = new Rand(id + 2);
 
                 meshes.add(new NoiseMesh(
-                    this, 0, 2, radius, 2, 0.55f, 0.45f, 14f,
+                    this, seed, 2, radius, 2, 0.55f, 0.45f, 14f,
                     color, tinted, 3, 0.6f, 0.38f, tintThresh
                 ));
 
                 for(int j = 0; j < pieces; j++){
                     meshes.add(new MatMesh(
-                        new NoiseMesh(this, j + 1, 1, 0.022f + rand.random(0.039f) * scale, 2, 0.6f, 0.38f, 20f,
+                        new NoiseMesh(this, seed + j + 1, 1, 0.022f + rand.random(0.039f) * scale, 2, 0.6f, 0.38f, 20f,
                         color, tinted, 3, 0.6f, 0.38f, tintThresh),
                         new Mat3D().setToTranslation(Tmp.v31.setToRandomDirection(rand).setLength(rand.random(0.44f, 1.4f) * scale)))
                     );

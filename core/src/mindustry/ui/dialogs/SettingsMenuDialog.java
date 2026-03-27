@@ -54,11 +54,16 @@ public class SettingsMenuDialog extends BaseDialog{
             rebuildMenu();
         });
 
+        int[] lastRebuildSize = {Core.graphics.getWidth(), Core.graphics.getHeight()};
         onResize(() -> {
-            graphics.rebuild();
-            sound.rebuild();
-            game.rebuild();
-            updateScrollFocus();
+            if(lastRebuildSize[0] != Core.graphics.getWidth() || lastRebuildSize[1] != Core.graphics.getHeight()){
+                graphics.rebuild();
+                sound.rebuild();
+                game.rebuild();
+                updateScrollFocus();
+                lastRebuildSize[0] = Core.graphics.getWidth();
+                lastRebuildSize[1] = Core.graphics.getHeight();
+            }
         });
 
         cont.clearChildren();
@@ -134,6 +139,7 @@ public class SettingsMenuDialog extends BaseDialog{
             t.button("@settings.clearcampaignsaves", Icon.trash, style, () -> {
                 ui.showConfirm("@confirm", "@settings.clearcampaignsaves.confirm", () -> {
                     for(var planet : content.planets()){
+                        planet.clearStats();
                         for(var sec : planet.sectors){
                             sec.clearInfo();
                             if(sec.save != null){
@@ -306,18 +312,15 @@ public class SettingsMenuDialog extends BaseDialog{
 
         if(mobile){
             game.checkPref("autotarget", true);
-            if(!ios){
-                game.checkPref("keyboard", false, val -> {
-                    control.setInput(val ? new DesktopInput() : new MobileInput());
-                    input.setUseKeyboard(val);
-                });
-                if(Core.settings.getBool("keyboard")){
-                    control.setInput(new DesktopInput());
-                    input.setUseKeyboard(true);
-                }
-            }else{
-                Core.settings.put("keyboard", false);
+            game.checkPref("keyboard", false, val -> {
+                control.setInput(val ? new DesktopInput() : new MobileInput());
+                input.setUseKeyboard(val);
+            });
+            if(Core.settings.getBool("keyboard")){
+                control.setInput(new DesktopInput());
+                input.setUseKeyboard(true);
             }
+
         }
         //the issue with touchscreen support on desktop is that:
         //1) I can't test it
@@ -332,6 +335,13 @@ public class SettingsMenuDialog extends BaseDialog{
         if(!mobile){
             game.checkPref("crashreport", true);
         }
+
+        game.checkPref("communityservers", true, val -> {
+            defaultServers.clear();
+            if(val){
+                JoinDialog.fetchServers();
+            }
+        });
 
         game.checkPref("savecreate", true);
         game.checkPref("blockreplace", true);
@@ -369,6 +379,13 @@ public class SettingsMenuDialog extends BaseDialog{
             game.checkPref("console", false);
         }
 
+        graphics.sliderPref("uiEdgePadding", 0, 0, 100, s -> s + "px", s -> {
+            if(ui != null){
+                ui.updateMargins();
+                Core.scene.resize(Core.graphics.getWidth(), Core.graphics.getHeight());
+            }
+        });
+
         int[] lastUiScale = {settings.getInt("uiscale", 100)};
 
         graphics.sliderPref("uiscale", 100, 25, 300, 5, s -> {
@@ -382,7 +399,18 @@ public class SettingsMenuDialog extends BaseDialog{
         graphics.sliderPref("bloomintensity", 6, 0, 16, i -> (int)(i/4f * 100f) + "%");
         graphics.sliderPref("bloomblur", 2, 1, 16, i -> i + "x");
 
-        graphics.sliderPref("fpscap", 240, 10, 245, 5, s -> (s > 240 ? Core.bundle.get("setting.fpscap.none") : Core.bundle.format("setting.fpscap.text", s)));
+        graphics.sliderPref("fpscap", 240, 10, 245, 5, s -> {
+            if(ios){
+                Core.graphics.setPreferredFPS(s > 240 ? 0 : s);
+            }
+            return (s > 240 ? Core.bundle.get("setting.fpscap.none") : Core.bundle.format("setting.fpscap.text", s));
+        });
+
+        if(ios){
+            int value = Core.settings.getInt("fpscap", 240);
+            Core.graphics.setPreferredFPS(value > 240 ? 0 : value);
+        }
+
         graphics.sliderPref("chatopacity", 100, 0, 100, 5, s -> s + "%");
         graphics.sliderPref("lasersopacity", 100, 0, 100, 5, s -> {
             if(ui.settings != null){
@@ -390,7 +418,23 @@ public class SettingsMenuDialog extends BaseDialog{
             }
             return s + "%";
         });
+
+        graphics.sliderPref("unitlaseropacity", 100, 0, 100, 5, s -> s + "%");
         graphics.sliderPref("bridgeopacity", 100, 0, 100, 5, s -> s + "%");
+
+        graphics.sliderPref("maxmagnificationmultiplierpercent", 100, 100, 200, 25, s -> {
+            if(ui.settings != null){
+                Core.settings.put("maxzoomingamemultiplier", (float)s / 100.0f);
+            }
+            return s + "%";
+        });
+
+        graphics.sliderPref("minmagnificationmultiplierpercent", 100, 100, 300, 25, s -> {
+            if(ui.settings != null){
+                Core.settings.put("minzoomingamemultiplier", (float)s / 100.0f);
+            }
+            return s + "%";
+        });
 
         if(!mobile){
             graphics.checkPref("vsync", true, b -> Core.graphics.setVSync(b));
@@ -441,7 +485,7 @@ public class SettingsMenuDialog extends BaseDialog{
         }
 
         graphics.checkPref("effects", true);
-        graphics.checkPref("atmosphere", !mobile);
+        graphics.checkPref("atmosphere", true);
         graphics.checkPref("drawlight", true);
         graphics.checkPref("destroyedblocks", true);
         graphics.checkPref("blockstatus", false);
@@ -451,18 +495,23 @@ public class SettingsMenuDialog extends BaseDialog{
         }
         graphics.checkPref("minimap", !mobile);
         graphics.checkPref("smoothcamera", true);
+        if(!mobile){
+            graphics.checkPref("detach-camera", false);
+        }
         graphics.checkPref("position", false);
         if(!mobile){
             graphics.checkPref("mouseposition", false);
         }
         graphics.checkPref("fps", false);
         graphics.checkPref("playerindicators", true);
+        graphics.checkPref("showpings", true);
+        graphics.checkPref("showotherbuildplans", true);
         graphics.checkPref("indicators", true);
         graphics.checkPref("showweather", true);
         graphics.checkPref("animatedwater", true);
 
         if(Shaders.shield != null){
-            graphics.checkPref("animatedshields", !mobile);
+            graphics.checkPref("animatedshields", true);
         }
 
         graphics.checkPref("bloom", true, val -> renderer.toggleBloom(val));
@@ -474,16 +523,12 @@ public class SettingsMenuDialog extends BaseDialog{
         });
 
         //iOS (and possibly Android) devices do not support linear filtering well, so disable it
-        if(!ios){
-            graphics.checkPref("linear", !mobile, b -> {
-                for(Texture tex : Core.atlas.getTextures()){
-                    TextureFilter filter = b ? TextureFilter.linear : TextureFilter.nearest;
-                    tex.setFilter(filter, filter);
-                }
-            });
-        }else{
-            settings.put("linear", false);
-        }
+        graphics.checkPref("linear", !mobile, b -> {
+            for(Texture tex : Core.atlas.getTextures()){
+                TextureFilter filter = b ? TextureFilter.linear : TextureFilter.nearest;
+                tex.setFilter(filter, filter);
+            }
+        });
 
         if(Core.settings.getBool("linear")){
             for(Texture tex : Core.atlas.getTextures()){
@@ -643,8 +688,16 @@ public class SettingsMenuDialog extends BaseDialog{
         }
 
         public SliderSetting sliderPref(String name, int def, int min, int max, int step, StringProcessor s){
+            return sliderPref(name, def, min, max, step, s, null);
+        }
+
+        public SliderSetting sliderPref(String name, int def, int min, int max, StringProcessor s, Intc changed){
+            return sliderPref(name, def, min, max, 1, s, changed);
+        }
+
+        public SliderSetting sliderPref(String name, int def, int min, int max, int step, StringProcessor s, Intc changed){
             SliderSetting res;
-            list.add(res = new SliderSetting(name, def, min, max, step, s));
+            list.add(res = new SliderSetting(name, def, min, max, step, s, changed));
             settings.defaults(name, def);
             rebuild();
             return res;
@@ -753,14 +806,16 @@ public class SettingsMenuDialog extends BaseDialog{
         public static class SliderSetting extends Setting{
             int def, min, max, step;
             StringProcessor sp;
+            Intc changed;
 
-            public SliderSetting(String name, int def, int min, int max, int step, StringProcessor s){
+            public SliderSetting(String name, int def, int min, int max, int step, StringProcessor s, Intc changed){
                 super(name);
                 this.def = def;
                 this.min = min;
                 this.max = max;
                 this.step = step;
                 this.sp = s;
+                this.changed = changed;
             }
 
             @Override
@@ -779,6 +834,7 @@ public class SettingsMenuDialog extends BaseDialog{
                 slider.changed(() -> {
                     settings.put(name, (int)slider.getValue());
                     value.setText(sp.get((int)slider.getValue()));
+                    if(changed != null) changed.get((int)slider.getValue());
                 });
 
                 slider.change();

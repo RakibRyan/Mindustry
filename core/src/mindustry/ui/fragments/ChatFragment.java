@@ -14,6 +14,7 @@ import arc.scene.ui.layout.*;
 import arc.struct.*;
 import arc.util.*;
 import mindustry.*;
+import mindustry.core.*;
 import mindustry.game.EventType.*;
 import mindustry.gen.*;
 import mindustry.input.*;
@@ -38,6 +39,7 @@ public class ChatFragment extends Table{
     private Seq<String> history = new Seq<>();
     private int historyPos = 0;
     private int scrollPos = 0;
+    private boolean lastFrameHadFocus;
 
     public ChatFragment(){
         super();
@@ -58,26 +60,29 @@ public class ChatFragment extends Table{
         });
 
         update(() -> {
+            boolean hasOtherFocus = (scene.getKeyboardFocus() != null && !chatfield.hasKeyboard()) && !(ui.minimapfrag.shown() && !(scene.getKeyboardFocus() instanceof TextField));
 
-            if(net.active() && input.keyTap(Binding.chat) && (scene.getKeyboardFocus() == chatfield || scene.getKeyboardFocus() == null || ui.minimapfrag.shown()) && !ui.consolefrag.shown()){
+            if(net.active() && input.keyTap(Binding.chat) && !hasOtherFocus && !lastFrameHadFocus && !ui.consolefrag.shown()){
                 toggle();
             }
 
             if(shown){
-                if(input.keyTap(Binding.chat_history_prev) && historyPos < history.size - 1){
+                if(input.keyTap(Binding.chatHistoryPrev) && historyPos < history.size - 1){
                     if(historyPos == 0) history.set(0, chatfield.getText());
                     historyPos++;
                     updateChat();
                 }
-                if(input.keyTap(Binding.chat_history_next) && historyPos > 0){
+                if(input.keyTap(Binding.chatHistoryNext) && historyPos > 0){
                     historyPos--;
                     updateChat();
                 }
-                if(input.keyTap(Binding.chat_mode)){
+                if(input.keyTap(Binding.chatMode)){
                     nextMode();
                 }
-                scrollPos = (int)Mathf.clamp(scrollPos + input.axis(Binding.chat_scroll), 0, Math.max(0, messages.size - messagesShown));
+                scrollPos = (int)Mathf.clamp(scrollPos + input.axis(Binding.chatScroll), 0, Math.max(0, messages.size - messagesShown));
             }
+
+            lastFrameHadFocus = hasOtherFocus;
         });
 
         history.insert(0, "");
@@ -125,7 +130,8 @@ public class ChatFragment extends Table{
             if(index >= 0 && index < cursor){
                 String text = chatfield.getText().substring(index + 1, cursor - 1);
                 String uni = Fonts.getUnicodeStr(text);
-                if(uni != null && uni.length() > 0){
+                if((uni == null || uni.isEmpty()) && Iconc.codes.containsKey(text)) uni = Character.toString((char)Iconc.codes.get(text));
+                if(uni != null && !uni.isEmpty()){
                     chatfield.setText(chatfield.getText().substring(0, index) + uni + chatfield.getText().substring(cursor));
                     chatfield.setCursorPosition(index + uni.length());
                 }
@@ -161,14 +167,15 @@ public class ChatFragment extends Table{
 
         float theight = offsety + spacing + getMarginBottom() + scene.marginBottom;
         for(int i = scrollPos; i < messages.size && i < messagesShown + scrollPos && (i < fadetime || shown); i++){
+            String message = messages.get(i);
 
-            layout.setText(font, messages.get(i), Color.white, textWidth, Align.bottomLeft, true);
+            layout.setText(font, message, Color.white, textWidth, Align.bottomLeft, true);
             theight += layout.height + textspacing;
             if(i - scrollPos == 0) theight -= textspacing + 1;
 
             font.getCache().clear();
             font.getCache().setColor(Color.white);
-            font.getCache().addText(messages.get(i), fontoffsetx + offsetx, offsety + theight, textWidth, Align.bottomLeft, true);
+            font.getCache().addText(message, fontoffsetx + offsetx, offsety + theight, textWidth, Align.bottomLeft, true);
 
             if(!shown && fadetime - i < 1f && fadetime - i >= 0f){
                 font.getCache().setAlphas((fadetime - i) * opacity);
@@ -191,6 +198,26 @@ public class ChatFragment extends Table{
         }
     }
 
+    //ping format: "x,y [text]"
+    private void checkPing(String message){
+        int comma = message.indexOf(',');
+        if(comma != -1){
+            int space = message.indexOf(' ', comma + 1);
+            //handle a space after the comma
+            boolean extra = false;
+            if(space == comma + 1){
+                extra = true;
+                space = message.indexOf(' ', comma + 2);
+            }
+            if(space != -1){
+                int x = Strings.parseInt(message, 10, -1, 0, comma), y = Strings.parseInt(message, 10, -1, comma + 1 + (extra ? 1 : 0), space);
+                if(world.tiles.in(x, y)){
+                    Call.pingLocation(player, x * tilesize, y * tilesize, message.substring(space).trim());
+                }
+            }
+        }
+    }
+
     private void sendMessage(){
         String message = chatfield.getText().trim();
         clearChatInput();
@@ -198,7 +225,11 @@ public class ChatFragment extends Table{
         //avoid sending prefix-empty messages
         if(message.isEmpty() || (message.startsWith(mode.prefix) && message.substring(mode.prefix.length()).isEmpty())) return;
 
-        history.insert(1, message);
+        if(history.size < 2 || !history.get(1).equals(message)) history.insert(1, message);
+
+        message = UI.formatIcons(message);
+
+        checkPing(message);
 
         Events.fire(new ClientChatEvent(message));
 

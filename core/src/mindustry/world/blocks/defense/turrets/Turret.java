@@ -10,12 +10,14 @@ import arc.math.geom.*;
 import arc.struct.*;
 import arc.util.*;
 import arc.util.io.*;
+import mindustry.audio.*;
 import mindustry.content.*;
 import mindustry.core.*;
 import mindustry.entities.*;
 import mindustry.entities.Units.*;
 import mindustry.entities.bullet.*;
 import mindustry.entities.pattern.*;
+import mindustry.entities.units.*;
 import mindustry.game.EventType.*;
 import mindustry.game.*;
 import mindustry.gen.*;
@@ -23,6 +25,7 @@ import mindustry.graphics.*;
 import mindustry.logic.*;
 import mindustry.type.*;
 import mindustry.ui.*;
+import mindustry.world.*;
 import mindustry.world.blocks.*;
 import mindustry.world.draw.*;
 import mindustry.world.meta.*;
@@ -54,22 +57,28 @@ public class Turret extends ReloadTurret{
     public float inaccuracy = 0f;
     /** Fraction of bullet velocity that is random. */
     public float velocityRnd = 0f;
+    /** Fraction of lifetime that is added to bullets with lifeScale. */
+    public float scaleLifetimeOffset = 0f;
     /** Maximum angle difference in degrees at which turret will still try to shoot. */
     public float shootCone = 8f;
     /** Turret shoot point. */
     public float shootX = 0f, shootY = Float.NEGATIVE_INFINITY;
     /** Random spread on the X axis. */
     public float xRand = 0f;
+    /** If true, a range ring is also drawn for minRange. */
+    public boolean drawMinRange;
     /** Range at which it finds and locks on to the target, but does not shoot. */
     public float trackingRange = 0f;
     /** Minimum bullet range. Used for artillery only. */
     public float minRange = 0f;
     /** Minimum warmup needed to fire. */
     public float minWarmup = 0f;
-    /** If true, this turret will accurately target moving targets with respect to charge time. */
+    /** If true, this turret will accurately target moving targets with respect to shoot.firstShotDelay. */
     public boolean accurateDelay = true;
     /** If false, this turret can't move while charging. */
     public boolean moveWhileCharging = true;
+    /** If false, this turret can't reload while charging */
+    public boolean reloadWhileCharging = true;
     /** How long warmup is maintained even if this turret isn't shooting. */
     public float warmupMaintainTime = 0f;
     /** pattern used for bullets */
@@ -109,9 +118,15 @@ public class Turret extends ReloadTurret{
     /** Effect created when ammo is used. Not optional. */
     public Effect ammoUseEffect = Fx.none;
     /** Sound emitted when a single bullet is shot. */
-    public Sound shootSound = Sounds.shoot;
+    public Sound shootSound = Sounds.shootDuo;
+    /** Volume of shooting sound. */
+    public float shootSoundVolume = 1f;
     /** Sound emitted when shoot.firstShotDelay is >0 and shooting begins. */
     public Sound chargeSound = Sounds.none;
+    /** The sound that this block makes while active. One sound loop. Do not overuse. */
+    public Sound loopSound = Sounds.none;
+    /** Active sound base volume. */
+    public float loopSoundVolume = 0.5f;
     /** Range for pitch of shoot sound. */
     public float soundPitchMin = 0.9f, soundPitchMax = 1.1f;
     /** Backwards Y offset of ammo eject effect. */
@@ -141,10 +156,17 @@ public class Turret extends ReloadTurret{
     public Turret(String name){
         super(name);
         liquidCapacity = 20f;
-        quickRotate = false;
         outlinedIcon = 1;
         drawLiquidLight = false;
         sync = true;
+        rotate = true;
+        quickRotate = false;
+        drawArrow = false;
+        ignoreLineRotation = true;
+        rotateDrawEditor = false;
+        visualRotationOffset = -90f;
+        regionRotated1 = 1;
+        regionRotated2 = 2;
     }
 
     @Override
@@ -157,11 +179,12 @@ public class Turret extends ReloadTurret{
         super.setStats();
 
         stats.add(Stat.inaccuracy, (int)inaccuracy, StatUnit.degrees);
-        stats.add(Stat.reload, 60f / (reload) * shoot.shots, StatUnit.perSecond);
+        stats.add(Stat.reload, 60f / (reload + (!reloadWhileCharging ? shoot.firstShotDelay : 0f)) * shoot.shots, StatUnit.perSecond);
         stats.add(Stat.targetsAir, targetAir);
         stats.add(Stat.targetsGround, targetGround);
         if(ammoPerShot != 1) stats.add(Stat.ammoUse, ammoPerShot, StatUnit.perShot);
         if(heatRequirement > 0) stats.add(Stat.input, heatRequirement, StatUnit.heatUnits);
+        if(heatRequirement > 0 && maxHeatEfficiency > 0) stats.add(Stat.maxEfficiency, (int)(maxHeatEfficiency * 100f), StatUnit.percent);
     }
 
     @Override
@@ -185,6 +208,10 @@ public class Turret extends ReloadTurret{
         if(cooldownTime < 0f) cooldownTime = reload;
         if(newTargetInterval <= 0f) newTargetInterval = targetInterval;
 
+        if(!targetGround){
+            disableOverlapCheck = true;
+        }
+
         super.init();
         trackingRange = Math.max(range, trackingRange);
     }
@@ -194,6 +221,11 @@ public class Turret extends ReloadTurret{
         super.load();
 
         drawer.load(this);
+    }
+
+    @Override
+    public void drawPlanRegion(BuildPlan plan, Eachable<BuildPlan> list){
+        drawer.drawPlan(this, plan, list);
     }
 
     @Override
@@ -209,13 +241,36 @@ public class Turret extends ReloadTurret{
     public void limitRange(BulletType bullet, float margin){
         float realRange = bullet.rangeChange + range;
         //doesn't handle drag
-        bullet.lifetime = (realRange + margin + bullet.extraRangeMargin) / bullet.speed;
+        bullet.lifetime = (realRange + margin + bullet.extraRangeMargin + 10f) / bullet.speed;
+    }
+
+    @Override
+    public void drawPlace(int x, int y, int rotation, boolean valid){
+        super.drawPlace(x, y, rotation, valid);
+
+        if(drawMinRange){
+            Drawf.dashCircle(x * tilesize + offset, y * tilesize + offset, minRange, Pal.placing);
+        }
     }
 
     public static abstract class AmmoEntry{
         public int amount;
 
         public abstract BulletType type();
+    }
+
+
+    @Override
+    public boolean rotatedOutput(int x, int y){
+        return false;
+    }
+
+    @Override
+    public void placeEnded(Tile tile, @Nullable Unit builder, int rotation, @Nullable Object config){
+        super.placeEnded(tile, builder, rotation, config);
+        if(rotate && tile.build instanceof TurretBuild turret){
+            turret.rotation = tile.build.rotdeg();
+        }
     }
 
     public class TurretBuild extends ReloadTurretBuild implements ControlBlock{
@@ -239,12 +294,37 @@ public class Turret extends ReloadTurret{
         public float heatReq;
         public float[] sideHeat = new float[4];
 
+        public @Nullable SoundLoop soundLoop = (loopSound == Sounds.none ? null : new SoundLoop(loopSound, loopSoundVolume));
+
         float lastRangeChange;
+
+        @Override
+        public void remove(){
+            super.remove();
+            if(soundLoop != null){
+                soundLoop.stop();
+            }
+        }
+
+        @Override
+        public void onDestroyed(){
+            super.onDestroyed();
+            if(soundLoop != null){
+                soundLoop.stop();
+            }
+        }
 
         @Override
         public float estimateDps(){
             if(!hasAmmo()) return 0f;
             return shoot.shots / reload * 60f * (peekAmmo() == null ? 0f : peekAmmo().estimateDPS()) * potentialEfficiency * timeScale;
+        }
+
+        public float minRange(){
+            if(peekAmmo() != null){
+                return minRange + peekAmmo().minRangeChange;
+            }
+            return minRange;
         }
 
         @Override
@@ -272,6 +352,13 @@ public class Turret extends ReloadTurret{
         @Override
         public boolean shouldConsume(){
             return isShooting() || reloadCounter < reload;
+        }
+
+        @Override
+        public BlockStatus status(){
+            if(enabled && !hasAmmo()) return BlockStatus.noInput;
+
+            return super.status();
         }
 
         @Override
@@ -345,7 +432,7 @@ public class Turret extends ReloadTurret{
         }
 
         public boolean isActive(){
-            return (target != null || wasShooting) && enabled;
+            return (target != null || wasShooting) && enabled && activationTimer <= 0;
         }
 
         public void targetPosition(Posc pos){
@@ -376,8 +463,21 @@ public class Turret extends ReloadTurret{
         }
 
         @Override
+        public void drawSelect(){
+            super.drawSelect();
+
+            if(drawMinRange){
+                Drawf.dashCircle(x, y, minRange(), team.color);
+            }
+        }
+
+        @Override
         public void updateTile(){
             if(!validateTarget()) target = null;
+
+            if(soundLoop != null){
+                soundLoop.update(x, y, shouldActiveSound(), activeSoundVolume());
+            }
 
             float warmupTarget = (isShooting() && canConsume()) || charging() ? 1f : 0f;
             if(warmupTarget > 0 && !isControlled()){
@@ -419,8 +519,16 @@ public class Turret extends ReloadTurret{
                 heatReq = calculateHeat(sideHeat);
             }
 
+            if(rotate){
+                //sync underlying rotation; 0-3 rotation is a shadowed field
+                ((Building)this).rotation = Mathf.mod(Mathf.round(rotation / 90f), 4);
+            }
+
             //turret always reloads regardless of whether it's targeting something
-            updateReload();
+            if(reloadWhileCharging || !charging()){
+                updateReload();
+                updateCooling();
+            }
 
             if(state.rules.fog){
                 float newRange = hasAmmo() ? peekAmmo().rangeChange : 0f;
@@ -428,6 +536,11 @@ public class Turret extends ReloadTurret{
                     lastRangeChange = newRange;
                     fogControl.forceUpdate(team, this);
                 }
+            }
+
+            if(activationTimer > 0){
+                activationTimer -= Time.delta;
+                return;
             }
 
             if(hasAmmo()){
@@ -438,7 +551,7 @@ public class Turret extends ReloadTurret{
                 }
 
                 if(validateTarget()){
-                    boolean canShoot = true;
+                    boolean canShoot;
 
                     if(isControlled()){ //player behavior
                         targetPos.set(unit.aimX(), unit.aimY());
@@ -476,10 +589,6 @@ public class Turret extends ReloadTurret{
                     updateShooting();
                 }
             }
-
-            if(coolant != null){
-                updateCooling();
-            }
         }
 
         @Override
@@ -489,6 +598,14 @@ public class Turret extends ReloadTurret{
             }
 
             super.handleLiquid(source, liquid, amount);
+        }
+
+        @Override
+        public boolean canConsume(){
+            if(heatRequirement > 0 && heatReq <= 0f){
+                return false;
+            }
+            return super.canConsume();
         }
 
         protected boolean validateTarget(){
@@ -559,13 +676,18 @@ public class Turret extends ReloadTurret{
 
         /** @return whether the turret has ammo. */
         public boolean hasAmmo(){
+            //skip first entry if it has less than the required amount of ammo
+            if(ammo.size >= 2 && ammo.peek().amount < ammoPerShot){
+                for(int i = 0; i < ammo.size; i ++){
+                    if(ammo.get(i).amount >= ammoPerShot){
+                        ammo.swap(ammo.size - 1, i);
+                        break;
+                    }
+                }
+            }
+
             //used for "side-ammo" like gas in some turrets
             if(!canConsume()) return false;
-
-            //skip first entry if it has less than the required amount of ammo
-            if(ammo.size >= 2 && ammo.peek().amount < ammoPerShot && ammo.get(ammo.size - 2).amount >= ammoPerShot){
-                ammo.swap(ammo.size - 1, ammo.size - 2);
-            }
 
             return ammo.size > 0 && (ammo.peek().amount >= ammoPerShot || cheating());
         }
@@ -607,7 +729,9 @@ public class Turret extends ReloadTurret{
                 type.chargeEffect.at(bulletX, bulletY, rotation);
             }
 
-            shoot.shoot(barrelCounter, (xOffset, yOffset, angle, delay, mover) -> {
+            ShootPattern pattern = type.shootPattern != null ? type.shootPattern : shoot;
+
+            pattern.shoot(barrelCounter, (xOffset, yOffset, angle, delay, mover) -> {
                 queuedBullets++;
                 int barrel = barrelCounter;
 
@@ -640,14 +764,14 @@ public class Turret extends ReloadTurret{
             bulletY = y + Angles.trnsy(rotation - 90, shootX + xOffset + xSpread, shootY + yOffset),
             shootAngle = rotation + angleOffset + Mathf.range(inaccuracy + type.inaccuracy);
 
-            float lifeScl = type.scaleLife ? Mathf.clamp(Mathf.dst(bulletX, bulletY, targetPos.x, targetPos.y) / type.range, minRange / type.range, range() / type.range) : 1f;
+            float lifeScl = type.scaleLife ? Mathf.clamp((1 + scaleLifetimeOffset) * Mathf.dst(bulletX, bulletY, targetPos.x, targetPos.y) / type.range, minRange() / type.range, range() / type.range) : 1f;
 
             //TODO aimX / aimY for multi shot turrets?
             handleBullet(type.create(this, team, bulletX, bulletY, shootAngle, -1f, (1f - velocityRnd) + Mathf.random(velocityRnd), lifeScl, null, mover, targetPos.x, targetPos.y), xOffset, yOffset, shootAngle - rotation);
 
             (shootEffect == null ? type.shootEffect : shootEffect).at(bulletX, bulletY, rotation + angleOffset, type.hitColor);
             (smokeEffect == null ? type.smokeEffect : smokeEffect).at(bulletX, bulletY, rotation + angleOffset, type.hitColor);
-            shootSound.at(bulletX, bulletY, Mathf.random(soundPitchMin, soundPitchMax));
+            (type.shootSound != Sounds.none ? type.shootSound : shootSound).at(bulletX, bulletY, Mathf.random(soundPitchMin, soundPitchMax), shootSoundVolume);
 
             ammoUseEffect.at(
                 x - Angles.trnsx(rotation, ammoEjectBack),
@@ -675,12 +799,10 @@ public class Turret extends ReloadTurret{
 
         }
 
-        @Override
         public float activeSoundVolume(){
             return shootWarmup;
         }
 
-        @Override
         public boolean shouldActiveSound(){
             return shootWarmup > 0.01f && loopSound != Sounds.none;
         }

@@ -57,6 +57,7 @@ public class WallCrafter extends Block{
         rotate = true;
         update = true;
         solid = true;
+       ignoreLineRotation = true;
         regionRotated1 = 1;
 
         envEnabled |= Env.space;
@@ -85,7 +86,7 @@ public class WallCrafter extends Block{
 
         if(consItems && itemConsumer instanceof ConsumeItems coni){
             stats.remove(Stat.booster);
-            stats.add(Stat.booster, StatValues.itemBoosters("{0}" + StatUnit.timesSpeed.localized(), stats.timePeriod, itemBoostIntensity, 0f, coni.items, i -> Structs.contains(coni.items, s -> s.item == i)));
+            stats.add(Stat.booster, StatValues.itemBoosters("{0}" + StatUnit.timesSpeed.localized(), stats.timePeriod, itemBoostIntensity, 0f, coni.items));
         }
 
         if(liquidBoostIntensity != 1 && findConsumer(f -> f instanceof ConsumeLiquidBase && f.booster) instanceof ConsumeLiquidBase consBase){
@@ -203,20 +204,20 @@ public class WallCrafter extends Block{
                 }
             }, null) * Mathf.lerp(1f, liquidBoostIntensity, hasLiquidBooster ? optionalEfficiency : 0f) * (itemValid ? itemBoostIntensity : 1f);
 
-            if(itemValid && eff * efficiency > 0 && timer(timerUse, boostItemUseTime)){
+            if(itemValid && eff * efficiency > 0 && timer(timerUse, boostItemUseTime / timeScale)){
                 consume();
             }
 
             lastEfficiency = eff * timeScale * efficiency;
 
             if(cons && (time += edelta() * eff) >= drillTime){
-                items.add(output, 1);
+                offload(output);
                 time %= drillTime;
             }
 
             totalTime += edelta() * warmup * (eff <= 0f ? 0f : 1f);
 
-            if(timer(timerDump, dumpTime)){
+            if(timer(timerDump, dumpTime / timeScale)){
                 dump(output);
             }
         }

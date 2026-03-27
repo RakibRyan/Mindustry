@@ -2,7 +2,6 @@ package mindustry.core;
 
 import arc.*;
 import arc.assets.loaders.TextureLoader.*;
-import arc.audio.*;
 import arc.files.*;
 import arc.graphics.*;
 import arc.graphics.Texture.*;
@@ -27,7 +26,7 @@ import static mindustry.Vars.*;
 
 public class Renderer implements ApplicationListener{
     /** These are global variables, for headless access. Cached. */
-    public static float laserOpacity = 0.5f, bridgeOpacity = 0.75f;
+    public static float laserOpacity = 0.5f, unitLaserOpacity = 1f, bridgeOpacity = 0.75f;
 
     public final BlockRenderer blocks = new BlockRenderer();
     public final FogRenderer fog = new FogRenderer();
@@ -40,10 +39,13 @@ public class Renderer implements ApplicationListener{
     public @Nullable Bloom bloom;
     public @Nullable FrameBuffer backgroundBuffer;
     public FrameBuffer effectBuffer = new FrameBuffer();
-    public boolean animateShields, drawWeather = true, drawStatus, enableEffects, drawDisplays = true, drawLight = true, pixelate = false;
+    public boolean animateShields, animateWater, drawWeather = true, drawStatus, enableEffects, drawDisplays = true, drawLight = true, pixelate = false, showPings = true, showOtherBuildPlans = true;
     public float weatherAlpha;
-    /** minZoom = zooming out, maxZoom = zooming in */
+    /** minZoom = zooming out, maxZoom = zooming in, used by cutscenes */
     public float minZoom = 1.5f, maxZoom = 6f;
+
+    /** minZoom = zooming out, maxZoom = zooming in, used by actual gameplay zoom and regulated by settings **/
+    public float minZoomInGame = 0.5f, maxZoomInGame = 6f;
     public Seq<EnvRenderer> envRenderers = new Seq<>();
     public ObjectMap<String, Runnable> customBackgrounds = new ObjectMap<>();
     public TextureRegion[] bubbles = new TextureRegion[16], splashes = new TextureRegion[12];
@@ -52,7 +54,7 @@ public class Renderer implements ApplicationListener{
     //currently landing core, null if there are no cores or it has finished landing.
     private @Nullable LaunchAnimator launchAnimator;
     private Color clearColor = new Color(0f, 0f, 0f, 1f);
-    private float
+    public float
     //target camera scale that is lerp-ed to
     targetscale = Scl.scl(4),
     //current actual camera scale
@@ -68,6 +70,7 @@ public class Renderer implements ApplicationListener{
     //for landTime > 0: if true, core is currently *launching*, otherwise landing.
     private boolean launching;
     private Vec2 camShakeOffset = new Vec2();
+    private int glErrors;
 
     public Renderer(){
         camera = new Camera();
@@ -97,7 +100,7 @@ public class Renderer implements ApplicationListener{
     public void init(){
         planets = new PlanetRenderer();
 
-        if(settings.getBool("bloom", !ios)){
+        if(settings.getBool("bloom", true)){
             setupBloom();
         }
 
@@ -147,6 +150,7 @@ public class Renderer implements ApplicationListener{
 
     @Override
     public void update(){
+        PerfCounter.render.begin();
         Color.white.set(1f, 1f, 1f, 1f);
 
         float baseTarget = targetscale;
@@ -158,13 +162,19 @@ public class Renderer implements ApplicationListener{
         float dest = Mathf.clamp(Mathf.round(baseTarget, 0.5f), minScale(), maxScale());
         camerascale = Mathf.lerpDelta(camerascale, dest, 0.1f);
         if(Mathf.equal(camerascale, dest, 0.001f)) camerascale = dest;
+        unitLaserOpacity = settings.getInt("unitlaseropacity") / 100f;
         laserOpacity = settings.getInt("lasersopacity") / 100f;
         bridgeOpacity = settings.getInt("bridgeopacity") / 100f;
         animateShields = settings.getBool("animatedshields");
+        animateWater = settings.getBool("animatedwater");
         drawStatus = settings.getBool("blockstatus");
         enableEffects = settings.getBool("effects");
         drawDisplays = !settings.getBool("hidedisplays");
+        maxZoomInGame = settings.getFloat("maxzoomingamemultiplier", 1) * maxZoom;
+        minZoomInGame = minZoom / settings.getFloat("minzoomingamemultiplier", 1);
         drawLight = settings.getBool("drawlight", true);
+        showPings = settings.getBool("showpings", true);
+        showOtherBuildPlans = settings.getBool("showotherbuildplans", true);
         pixelate = settings.getBool("pixelate");
 
         //don't bother drawing landing animation if core is null
@@ -214,6 +224,26 @@ public class Renderer implements ApplicationListener{
 
             camera.position.sub(camShakeOffset);
         }
+
+        //glGetError can be expensive, so only check it periodically
+        if(glErrors < maxGlErrors && graphics.getFrameId() % 10 == 0){
+            int error = Gl.getError();
+            if(error != Gl.noError){
+                String message = switch(error){
+                    case Gl.invalidValue -> "invalid value";
+                    case Gl.invalidOperation -> "invalid operation";
+                    case Gl.invalidFramebufferOperation -> "invalid framebuffer operation";
+                    case Gl.invalidEnum -> "invalid enum";
+                    case Gl.outOfMemory -> "out of memory";
+                    default -> "unknown error (" + error + ")";
+                };
+
+                Log.err("[GL] Error: @", message);
+                glErrors ++;
+            }
+        }
+
+        PerfCounter.render.end();
     }
 
     public void updateAllDarkness(){
@@ -282,7 +312,7 @@ public class Renderer implements ApplicationListener{
         graphics.clear(clearColor);
         Draw.reset();
 
-        if(settings.getBool("animatedwater") || animateShields){
+        if(animateWater || animateShields){
             effectBuffer.resize(graphics.getWidth(), graphics.getHeight());
         }
 
@@ -307,7 +337,6 @@ public class Renderer implements ApplicationListener{
         Draw.draw(Layer.block - 0.09f, () -> {
             blocks.floor.beginDraw();
             blocks.floor.drawLayer(CacheLayer.walls);
-            blocks.floor.endDraw();
         });
 
         Draw.drawRange(Layer.blockBuilding, () -> Draw.shader(Shaders.blockbuild, true), Draw::shader);
@@ -387,6 +416,10 @@ public class Renderer implements ApplicationListener{
         blocks.drawBlocks();
 
         Groups.draw.draw(Drawc::draw);
+
+        if(drawDebugHitboxes){
+            DebugCollisionRenderer.draw();
+        }
 
         Draw.reset();
         Draw.flush();
@@ -485,11 +518,13 @@ public class Renderer implements ApplicationListener{
     }
 
     public float minScale(){
-        return Scl.scl(minZoom);
+        if(control.input.logicCutscene) return Scl.scl(minZoom);
+        return Scl.scl(minZoomInGame);
     }
 
     public float maxScale(){
-        return Mathf.round(Scl.scl(maxZoom));
+        if(control.input.logicCutscene) return Mathf.round(Scl.scl(maxZoom));
+        return Mathf.round(Scl.scl(maxZoomInGame));
     }
 
     public float getScale(){
@@ -534,11 +569,6 @@ public class Renderer implements ApplicationListener{
         launching = true;
         landTime = landCore.launchDuration();
 
-        Music music = landCore.launchMusic();
-        music.stop();
-        music.play();
-        music.setVolume(settings.getInt("musicvol") / 100f);
-
         landCore.beginLaunch(true);
     }
 
@@ -560,7 +590,7 @@ public class Renderer implements ApplicationListener{
         camera.height = h;
         camera.position.x = w / 2f + tilesize / 2f;
         camera.position.y = h / 2f + tilesize / 2f;
-        buffer.begin();
+        buffer.begin(Color.clear);
         draw();
         Draw.flush();
         byte[] lines = ScreenUtils.getFrameBufferPixels(0, 0, w, h, true);

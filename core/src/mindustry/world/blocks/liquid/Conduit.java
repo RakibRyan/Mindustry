@@ -107,11 +107,13 @@ public class Conduit extends LiquidBlock implements Autotiler{
 
         if(bits == null) return;
 
+        float pa = Draw.getColorAlpha();
+
         Draw.scl(bits[1], bits[2]);
-        Draw.color(botColor);
-        Draw.alpha(0.5f);
+        Draw.color(botColor, pa * botColor.a);
+        Draw.alpha(0.5f * pa);
         Draw.rect(botRegions[bits[0]], plan.drawx(), plan.drawy(), plan.rotation * 90);
-        Draw.color();
+        Draw.color(Color.white, pa);
         Draw.rect(topRegions[bits[0]], plan.drawx(), plan.drawy(), plan.rotation * 90);
         Draw.scl();
     }
@@ -140,7 +142,7 @@ public class Conduit extends LiquidBlock implements Autotiler{
         if(rotBridgeReplacement instanceof DirectionBridge duct){
             Placement.calculateBridges(plans, duct, true, b -> b instanceof Conduit);
         }else{
-            Placement.calculateBridges(plans, (ItemBridge)bridgeReplacement, b -> b instanceof Conduit);
+            Placement.calculateBridges(plans, (ItemBridge)bridgeReplacement, true, b -> b instanceof Conduit);
         }
     }
 

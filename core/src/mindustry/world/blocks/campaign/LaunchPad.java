@@ -30,10 +30,12 @@ import static mindustry.Vars.*;
 public class LaunchPad extends Block{
     /** Time between launches. */
     public float launchTime = 1f;
-    public Sound launchSound = Sounds.none;
+    public float launchSoundPitchRand = 0.1f;
+    public Sound launchSound = Sounds.padLaunch;
 
     public @Load("@-light") TextureRegion lightRegion;
     public @Load(value = "@-pod", fallback = "launchpod") TextureRegion podRegion;
+    public @Load(value = "@-preview", fallback = "@") TextureRegion previewRegion;
     public Color lightColor = Color.valueOf("eab678");
     public boolean acceptMultipleItems = false;
 
@@ -73,6 +75,11 @@ public class LaunchPad extends Block{
         return false;
     }
 
+    @Override
+    public TextureRegion[] icons(){
+        return new TextureRegion[]{previewRegion};
+    }
+
     public class LaunchPadBuild extends Building{
         public float launchCounter;
 
@@ -104,8 +111,6 @@ public class LaunchPad extends Block{
 
             super.draw();
 
-            if(!state.isCampaign()) return;
-
             if(lightRegion.found()){
                 Draw.color(lightColor);
                 float progress = Math.min((float)items.total() / itemCapacity, launchCounter / launchTime);
@@ -136,13 +141,12 @@ public class LaunchPad extends Block{
 
         @Override
         public void updateTile(){
-            if(!state.isCampaign()) return;
 
             //increment launchCounter then launch when full and base conditions are met
             if((launchCounter += edelta()) >= launchTime && items.total() >= itemCapacity){
                 //if there are item requirements, use those.
                 consume();
-                launchSound.at(x, y);
+                launchSound.at(x, y, 1f + Mathf.range(launchSoundPitchRand));
                 LaunchPayload entity = LaunchPayload.create();
                 items.each((item, amount) -> entity.stacks.add(new ItemStack(item, amount)));
                 entity.set(this);
@@ -173,8 +177,12 @@ public class LaunchPad extends Block{
         }
 
         @Override
+        public boolean shouldShowConfigure(Player player){
+            return state.isCampaign();
+        }
+
+        @Override
         public void buildConfiguration(Table table){
-            //TODO: this UI should be on landing pads
             if(!state.isCampaign() || net.client()){
                 deselect();
                 return;
@@ -296,7 +304,9 @@ public class LaunchPad extends Block{
                     Events.fire(new LaunchItemEvent(stack));
                 }
 
-                destsec.addItems(dest);
+                if(state.getPlanet().campaignRules.legacyLaunchPads){
+                    destsec.addItems(dest);
+                }
             }
         }
     }

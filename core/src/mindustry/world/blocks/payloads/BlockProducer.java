@@ -41,7 +41,11 @@ public abstract class BlockProducer extends PayloadBlock{
 
             if(block != null){
                 ItemStack[] clone = stacks.get(block, () -> ItemStack.copy(block.requirements));
+                if(clone.length != block.requirements.length){
+                    stacks.put(block, clone = ItemStack.copy(block.requirements));
+                }
                 for(int i = 0; i < clone.length; i++){
+                    clone[i].item = block.requirements[i].item;
                     clone[i].amount = Mathf.ceil(block.requirements[i].amount * state.rules.buildCostMultiplier);
                 }
                 return clone;
@@ -67,7 +71,7 @@ public abstract class BlockProducer extends PayloadBlock{
     public void setBars(){
         super.setBars();
 
-        addBar("progress", (BlockProducerBuild entity) -> new Bar("bar.progress", Pal.ammo, () -> entity.recipe() == null ? 0f : (entity.progress / entity.recipe().buildCost)));
+        addBar("progress", (BlockProducerBuild entity) -> new Bar("bar.progress", Pal.ammo, () -> entity.recipe() == null ? 0f : (entity.progress / entity.recipe().buildTime)));
     }
 
     public abstract class BlockProducerBuild extends PayloadBlockBuild<BuildPayload>{
@@ -108,7 +112,7 @@ public abstract class BlockProducer extends PayloadBlock{
             if(produce){
                 progress += buildSpeed * edelta();
 
-                if(progress >= recipe.buildCost){
+                if(progress >= recipe.buildTime){
                     consume();
                     payload = new BuildPayload(recipe, team);
                     payload.block().placeEffect.at(x, y, payload.size() / tilesize);
@@ -130,14 +134,14 @@ public abstract class BlockProducer extends PayloadBlock{
 
             var recipe = recipe();
             if(recipe != null){
-                Drawf.shadow(x, y, recipe.size * tilesize * 2f, progress / recipe.buildCost);
+                Drawf.shadow(x, y, recipe.size * tilesize * 2f, progress / recipe.buildTime);
                 Draw.draw(Layer.blockBuilding, () -> {
                     Draw.color(Pal.accent);
 
                     for(TextureRegion region : recipe.getGeneratedIcons()){
                         Shaders.blockbuild.region = region;
                         Shaders.blockbuild.time = time;
-                        Shaders.blockbuild.progress = progress / recipe.buildCost;
+                        Shaders.blockbuild.progress = progress / recipe.buildTime;
 
                         Draw.rect(region, x, y, recipe.rotate ? rotdeg() : 0);
                         Draw.flush();
